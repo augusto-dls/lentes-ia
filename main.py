@@ -12,7 +12,7 @@ from google import genai as google_genai
 from google.genai import types
 from openai import OpenAI
 from gtts import gTTS
-from subprocess
+import subprocess
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
