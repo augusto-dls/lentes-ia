@@ -12,7 +12,7 @@ from google import genai as google_genai
 from google.genai import types
 from openai import OpenAI
 from gtts import gTTS
-from pydub import AudioSegment
+from subprocess
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -147,21 +147,25 @@ def analizar_imagen_con_fallback(imagen_bytes: bytes, imagen_base64: str, tipo: 
 
 # ---------- TTS Y CONVERSIÓN ----------
 
+import subprocess
+
 def texto_a_wav_chunks(texto: str, chunk_size: int = 4096):
-    # Generar MP3 con gTTS
     tts = gTTS(text=texto, lang="es")
-    archivo_temp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-    tts.save(archivo_temp.name)
+    mp3_temp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+    tts.save(mp3_temp.name)
 
-    # Convertir a WAV 8kHz mono 8-bit
-    audio = AudioSegment.from_mp3(archivo_temp.name)
-    audio = audio.set_frame_rate(8000).set_channels(1).set_sample_width(1)
-    os.unlink(archivo_temp.name)
+    resultado = subprocess.run(
+        ["ffmpeg", "-i", mp3_temp.name,
+         "-ar", "8000",
+         "-ac", "1",
+         "-acodec", "pcm_u8",
+         "-f", "wav",
+         "pipe:1"],
+        capture_output=True
+    )
+    os.unlink(mp3_temp.name)
 
-    buffer = io.BytesIO()
-    audio.export(buffer, format="wav")
-    wav_bytes = buffer.getvalue()
-
+    wav_bytes = resultado.stdout
     logger.info(f"WAV generado: {len(wav_bytes)} bytes")
 
     for i in range(0, len(wav_bytes), chunk_size):
