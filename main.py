@@ -1,15 +1,18 @@
 import os
 import base64
 import logging
+import tempfile
+import io
 from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
+from starlette.background import BackgroundTask
 from dotenv import load_dotenv
 import anthropic
 from google import genai as google_genai
 from google.genai import types
 from openai import OpenAI
 from gtts import gTTS
-import tempfile
+from pydub import AudioSegment
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -17,9 +20,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# ---------- CONFIGURACIÓN DE CLIENTES ----------
-
-# ---------- CONFIGURACIÓN DE CLIENTES ----------
+# ---------- CLIENTES ----------
 
 anthropic_client = None
 openai_client = None
@@ -29,7 +30,6 @@ if os.getenv("ANTHROPIC_API_KEY"):
     logger.info("Claude disponible")
 
 if os.getenv("GEMINI_API_KEY"):
-    #genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
     logger.info("Gemini disponible")
 
 if os.getenv("OPENAI_API_KEY"):
@@ -58,7 +58,7 @@ Respondé SIEMPRE en este formato:
 Descripción: [texto]
 Texto visible: [texto]"""
 
-# ---------- FUNCIONES POR MODELO ----------
+# ---------- ANÁLISIS DE IMAGEN ----------
 
 def analizar_con_claude(imagen_base64: str, tipo: str) -> str:
     logger.info("Intentando con Claude...")
@@ -117,8 +117,6 @@ def analizar_con_gpt4o(imagen_base64: str, tipo: str) -> str:
     return respuesta.choices[0].message.content
 
 
-# ---------- FALLBACK AUTOMÁTICO ----------
-
 def analizar_imagen_con_fallback(imagen_bytes: bytes, imagen_base64: str, tipo: str) -> str:
     modelos = []
 
@@ -147,7 +145,29 @@ def analizar_imagen_con_fallback(imagen_bytes: bytes, imagen_base64: str, tipo: 
         detail=f"Todos los modelos fallaron. Errores: {' | '.join(errores)}"
     )
 
-# ---------- ENDPOINT ----------
+# ---------- TTS Y CONVERSIÓN ----------
+
+def texto_a_wav_chunks(texto: str, chunk_size: int = 4096):
+    # Generar MP3 con gTTS
+    tts = gTTS(text=texto, lang="es")
+    archivo_temp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+    tts.save(archivo_temp.name)
+
+    # Convertir a WAV 8kHz mono 8-bit
+    audio = AudioSegment.from_mp3(archivo_temp.name)
+    audio = audio.set_frame_rate(8000).set_channels(1).set_sample_width(1)
+    os.unlink(archivo_temp.name)
+
+    buffer = io.BytesIO()
+    audio.export(buffer, format="wav")
+    wav_bytes = buffer.getvalue()
+
+    logger.info(f"WAV generado: {len(wav_bytes)} bytes")
+
+    for i in range(0, len(wav_bytes), chunk_size):
+        yield wav_bytes[i:i + chunk_size]
+
+# ---------- ENDPOINTS ----------
 
 @app.post("/analizar")
 async def analizar(imagen: UploadFile = File(...)):
@@ -156,17 +176,12 @@ async def analizar(imagen: UploadFile = File(...)):
     tipo = imagen.content_type or "image/jpeg"
 
     texto = analizar_imagen_con_fallback(contenido, imagen_base64, tipo)
+    logger.info(f"Texto generado: {texto[:80]}...")
 
-    tts = gTTS(text=texto, lang="es")
-    archivo_temp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-    tts.save(archivo_temp.name)
-
-    return FileResponse(
-        path=archivo_temp.name,
-        media_type="audio/mpeg",
-        filename="respuesta.mp3"
+    return StreamingResponse(
+        texto_a_wav_chunks(texto),
+        media_type="audio/wav"
     )
-
 
 @app.get("/")
 def root():

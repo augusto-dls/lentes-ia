@@ -6,3 +6,4 @@ google-genai
 openai
 gtts
 python-multipart
+pydub
